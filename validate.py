@@ -20,15 +20,15 @@ import scipy.io as sio
 import os
 import argparse
 
-# MODELS = ['MCNN','MCNN-CP','MCNN-PS','Oct-MCNN','Oct-MCNN-CP','Oct-MCNN-PS'] # 可选模型
-# DATASETS = ['IP','KSC','UP','SA'] # 可选数据集
-# RATIOS = [0.7,0.95] # 可选测试样本量，剩余为训练样本量
+# MODELS = ['MCNN-CP','Oct-MCNN-PS'] # 可选模型
+# DATASETS = ['IP','UH','UP','SA'] # 可选数据集
+# RATIOS = [0.99, 0.995] # 可选测试样本量(测试样本+验证样本)，剩余为训练样本量  IP:0.99  UH/UP/SA:0.995
 parser = argparse.ArgumentParser(description='evaluation')
 parser.add_argument('--dataset', '-d', type=str, default='IP',
                     help='dataset name')
 parser.add_argument('--model', '-m', type=str, default='Oct-MCNN-PS',
                     help='model name')
-parser.add_argument('--ratio', '-r', default=0.7, type=float,
+parser.add_argument('--ratio', '-r', default=0.99, type=float,
                     help='test ratio')
 args = parser.parse_args()
 
@@ -37,9 +37,9 @@ def loadData(name):
     if name == 'IP':
         data = sio.loadmat(os.path.join(data_path, 'Indian_pines_corrected.mat'))['indian_pines_corrected']
         labels = sio.loadmat(os.path.join(data_path, 'Indian_pines_gt.mat'))['indian_pines_gt']
-    elif name == 'KSC':
-        data = sio.loadmat(os.path.join(data_path, 'KSC.mat'))['KSC']
-        labels = sio.loadmat(os.path.join(data_path, 'KSC_gt.mat'))['KSC_gt']
+    elif name == 'UH':
+        data = sio.loadmat(os.path.join(data_path, 'HoustonU.mat'))['houstonU'] # 601*2384*50
+        labels = sio.loadmat(os.path.join(data_path, 'HoustonU_gt.mat'))['houstonU_gt']
     elif name == 'SA':
         data = sio.loadmat(os.path.join(data_path, 'Salinas_corrected.mat'))['salinas_corrected']
         labels = sio.loadmat(os.path.join(data_path, 'Salinas_gt.mat'))['salinas_gt']
@@ -116,9 +116,10 @@ def reports (X_test,y_test,name):
                         'Hay-windrowed', 'Oats', 'Soybean-notill', 'Soybean-mintill',
                         'Soybean-clean', 'Wheat', 'Woods', 'Buildings-Grass-Trees-Drives',
                         'Stone-Steel-Towers']
-    elif name == 'KSC':
-        target_names = ['Scrub','Willow-swamp','CP-hammock','Slash-pine','Oak/Broadleaf','Hardwood','Swamp','Graminoid-marsh'
-                        ,'Spartina-marsh','Cattail-marsh','Salt-marsh','Mud-flats','Water']
+    elif name == 'UH':
+        target_names = ['Healthy grass','Stressed grass','Artificial turf','Evergreen trees', 'Deciduous trees','Bare earth','Water',
+                        'Residential buildings','Non-residential buildings','Roads','Sidewalks','Crosswalks','Major thoroughfares','Highways',
+                       'Railways','Paved parking lots','Unpaved parking lots','Cars','Trains','Stadium seats']
     elif name == 'SA':
         target_names = ['Brocoli_green_weeds_1','Brocoli_green_weeds_2','Fallow','Fallow_rough_plow','Fallow_smooth',
                         'Stubble','Celery','Grapes_untrained','Soil_vinyard_develop','Corn_senesced_green_weeds',
@@ -147,28 +148,33 @@ def main():
     test_ratio = args.ratio
     train_ratio = int((1-test_ratio)*100)
 
-    windowSize = 25
+    windowSize = 11
     componentsNum = 20 if dataset == 'UP' else 28
     if dataset == 'UP':
-        output_units = 9
-    elif dataset == 'KSC':
-        output_units = 13
+      componentsNum = 15
+    elif dataset == 'UH':
+      componentsNum = 50 if test_ratio >= 0.99 else 25
+    elif dataset == 'IP':
+      componentsNum = 110
     else:
-        output_units = 16
-
+      componentsNum = 30
+    drop = 0.4
+    
     X, y = loadData(dataset)
     X,pca,ratio = applyPCA(X,numComponents=componentsNum)
     X = infoChange(X,componentsNum)
     X, y = createPatches(X, y, windowSize=windowSize)
+    
     Xtrain, Xtest, ytrain, ytest = splitTrainTestSet(X, y, test_ratio)
+    Xvalid, Xtest, yvalid, ytest = splitTrainTestSet(Xtest, ytest, (test_ratio-train_ratio/train_val_ratio)/test_ratio)
 
     Xtest = Xtest.reshape(-1, windowSize, windowSize, componentsNum, 1)
     ytest = np_utils.to_categorical(ytest)
 
-    model = load_model(str(modelname)+'.h5', custom_objects={'SubpixelConv2D': SubpixelConv2D,'tf': tf})
+    model = load_model('models/'+str(modelname)+'.h5', custom_objects={'SubpixelConv2D': SubpixelConv2D,'tf': tf})
     adam = Adam(lr=0.001, decay=1e-06)
 
-    model.load_weights(str(dataset)+"_"+str(modelname)+"_"+str(train_ratio)+".hdf5")
+    model.load_weights('pretrained_models/'+str(modelname)+"_"+str(dataset)+".hdf5")
     model.compile(loss='categorical_crossentropy', optimizer=adam, metrics=['accuracy'])
 
     Y_pred_test = model.predict(Xtest)
